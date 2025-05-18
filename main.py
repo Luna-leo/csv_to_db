@@ -94,25 +94,24 @@ def register_header_to_duckdb(header_lf: pl.LazyFrame, db_path: Path, table_name
     db_path.parent.mkdir(parents=True, exist_ok=True)
     
     # DuckDBに接続
-    con = duckdb.connect(db_path)
-    # DataFrame化
-    header_df = header_lf.collect().to_pandas()
-    # テーブル作成（なければ）
-    con.execute(f"""
-        CREATE TABLE IF NOT EXISTS {table_name} (
-            param_id TEXT,
-            param_name TEXT,
-            unit TEXT
-        )
-    """)
-    # 既存データ取得
-    existing_ids = set(con.execute(f"SELECT param_id FROM {table_name}").fetchall())
-    # 未登録データ抽出
-    new_rows = header_df[~header_df["param_id"].isin([row[0] for row in existing_ids])]
-    # 追記
-    if not new_rows.empty:
-        con.executemany(f"INSERT INTO {table_name} VALUES (?, ?, ?)", new_rows.values.tolist())
-    con.close()
+    with duckdb.connect(db_path) as con:
+        # DataFrame化
+        header_df = header_lf.collect().to_pandas()
+        # テーブル作成（なければ）
+        con.execute(f"""
+            CREATE TABLE IF NOT EXISTS {table_name} (
+                param_id TEXT,
+                param_name TEXT,
+                unit TEXT
+            )
+        """)
+        # 既存データ取得
+        existing_ids = set(con.execute(f"SELECT param_id FROM {table_name}").fetchall())
+        # 未登録データ抽出
+        new_rows = header_df[~header_df["param_id"].isin([row[0] for row in existing_ids])]
+        # 追記
+        if not new_rows.empty:
+            con.executemany(f"INSERT INTO {table_name} VALUES (?, ?, ?)", new_rows.values.tolist())
 
 
 def write_parquet_file(lf: pl.LazyFrame, parquet_path:Path, plant_name: str, machine_no:str):
@@ -154,26 +153,24 @@ def _ensure_processed_table(con: duckdb.DuckDBPyConnection, table_name: str) -> 
 def is_processed(file_path: Path, db_path: Path, table_name: str = "processed_files") -> bool:
     """Return ``True`` if ``file_path`` is already recorded as processed."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect(db_path)
-    _ensure_processed_table(con, table_name)
-    result = con.execute(
-        f"SELECT 1 FROM {table_name} WHERE file_path = ?",
-        [str(file_path)],
-    ).fetchone()
-    con.close()
-    return result is not None
+    with duckdb.connect(db_path) as con:
+        _ensure_processed_table(con, table_name)
+        result = con.execute(
+            f"SELECT 1 FROM {table_name} WHERE file_path = ?",
+            [str(file_path)],
+        ).fetchone()
+        return result is not None
 
 
 def mark_processed(file_path: Path, db_path: Path, table_name: str = "processed_files") -> None:
     """Record ``file_path`` as processed with the current timestamp."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect(db_path)
-    _ensure_processed_table(con, table_name)
-    con.execute(
-        f"INSERT OR REPLACE INTO {table_name} VALUES (?, ?)",
-        [str(file_path), datetime.now()],
-    )
-    con.close()
+    with duckdb.connect(db_path) as con:
+        _ensure_processed_table(con, table_name)
+        con.execute(
+            f"INSERT OR REPLACE INTO {table_name} VALUES (?, ?)",
+            [str(file_path), datetime.now()],
+        )
 
 
 def process_csv_files(
