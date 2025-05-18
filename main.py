@@ -56,6 +56,50 @@ def search_csv_file(
     return matched_files
 
 
+def collect_csv_files(
+    targets: list[Path], file_name_pattern: list[str] | None = None
+) -> list[Path]:
+    """Collect CSV files from directories or paths.
+
+    Each path in ``targets`` may be a directory, a CSV file or a ZIP archive.
+    ZIP archives are extracted under a ``__extracted_csvs__`` directory.
+    """
+
+    collected: list[Path] = []
+
+    for t in targets:
+        if t.is_dir():
+            collected.extend(search_csv_file(t, file_name_pattern))
+            continue
+
+        if t.is_file():
+            suffix = t.suffix.lower()
+            if suffix == ".csv":
+                if not file_name_pattern or any(p in t.name for p in file_name_pattern):
+                    collected.append(t)
+                continue
+            if suffix == ".zip":
+                try:
+                    with zipfile.ZipFile(t) as zf:
+                        for member in zf.namelist():
+                            mp = Path(member)
+                            if mp.is_absolute() or ".." in mp.parts:
+                                print(f"warning: skip invalid path {member} in {t}")
+                                continue
+                            if not mp.name.lower().endswith(".csv"):
+                                continue
+                            extract_dir = t.parent / "__extracted_csvs__" / t.stem
+                            extract_dir.mkdir(parents=True, exist_ok=True)
+                            zf.extract(member, path=extract_dir)
+                            fp = extract_dir / mp
+                            if not file_name_pattern or any(p in fp.name for p in file_name_pattern):
+                                collected.append(fp)
+                except zipfile.BadZipFile:
+                    continue
+
+    return collected
+
+
 
 def read_pi_file(file_path: Path, encoding="utf-8"):
     """Read a PI CSV file and return data and header LazyFrames.
@@ -312,3 +356,41 @@ def process_csv_files(
         register_header_to_duckdb(header_lf, db_path)
         write_parquet_file(lf, parquet_path, plant_name, machine_no)
         mark_processed(fp, db_path)
+
+
+def process_targets(
+    targets: list[Path],
+    parquet_path: Path,
+    plant_name: str,
+    machine_no: str,
+    db_path: Path,
+    *,
+    file_name_pattern: list[str] | None = None,
+    force: bool = False,
+) -> None:
+    """Entry point to process user-specified targets.
+
+    Parameters
+    ----------
+    targets : list[Path]
+        Directories or files (CSV/ZIP) to search.
+    parquet_path, plant_name, machine_no, db_path : Path/str
+        Parameters forwarded to :func:`process_csv_files`.
+    file_name_pattern : list[str] | None, optional
+        Patterns used to filter file names.
+    force : bool, optional
+        When ``True`` reprocess files even if they were already handled.
+    """
+
+    csv_files = collect_csv_files(targets, file_name_pattern)
+    if not csv_files:
+        print("No files to process")
+        return
+    process_csv_files(
+        csv_files,
+        parquet_path,
+        plant_name,
+        machine_no,
+        db_path,
+        force=force,
+    )

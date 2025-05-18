@@ -8,3 +8,6 @@
 - Processed file history is stored in DuckDB. The ``process_csv_files``
   function can skip files that were already processed or reprocess them
   when ``force=True``.
+- ``process_targets`` gathers CSV files from multiple directories or files
+  (including ``.zip``) and handles conversion, history updates and master table
+  updates in one call.
