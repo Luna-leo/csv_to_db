@@ -267,8 +267,10 @@ def _ensure_processed_table(con: duckdb.DuckDBPyConnection, table_name: str) -> 
     con.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
-            file_path TEXT PRIMARY KEY,
-            processed_at TIMESTAMP
+            file_name TEXT,
+            file_mtime TIMESTAMP,
+            processed_at TIMESTAMP,
+            PRIMARY KEY(file_name, file_mtime)
         )
         """
     )
@@ -276,6 +278,9 @@ def _ensure_processed_table(con: duckdb.DuckDBPyConnection, table_name: str) -> 
 
 def is_processed(file_path: Path, db_path: Path, table_name: str = "processed_files") -> bool:
     """Check whether a file has already been processed.
+
+    The history table stores the file name and modification time.  A record is
+    considered matching when both values are equal.
 
     Parameters
     ----------
@@ -292,17 +297,21 @@ def is_processed(file_path: Path, db_path: Path, table_name: str = "processed_fi
         ``True`` when a record for ``file_path`` exists.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
     with duckdb.connect(db_path) as con:
         _ensure_processed_table(con, table_name)
         result = con.execute(
-            f"SELECT 1 FROM {table_name} WHERE file_path = ?",
-            [str(file_path)],
+            f"SELECT 1 FROM {table_name} WHERE file_name = ? AND file_mtime = ?",
+            [file_path.name, mtime],
         ).fetchone()
         return result is not None
 
 
 def mark_processed(file_path: Path, db_path: Path, table_name: str = "processed_files") -> None:
     """Record that a file has been processed.
+
+    The file name and its last modification time are stored so that the same
+    file relocated elsewhere will not be mistaken as new.
 
     Parameters
     ----------
@@ -316,9 +325,10 @@ def mark_processed(file_path: Path, db_path: Path, table_name: str = "processed_
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with duckdb.connect(db_path) as con:
         _ensure_processed_table(con, table_name)
+        mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
         con.execute(
-            f"INSERT OR REPLACE INTO {table_name} VALUES (?, ?)",
-            [str(file_path), datetime.now()],
+            f"INSERT OR REPLACE INTO {table_name} VALUES (?, ?, ?)",
+            [file_path.name, mtime, datetime.now()],
         )
 
 
