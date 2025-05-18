@@ -5,11 +5,19 @@ import pyarrow.dataset as ds
 import zipfile
 from datetime import datetime
 
-def search_csv_file(target_path: Path, file_name_pattern: list[str]) -> list[Path]:
+def search_csv_file(
+    target_path: Path, file_name_pattern: list[str] | None = None
+) -> list[Path]:
     """Search for CSV files matching the given patterns under ``target_path``.
 
     This function also looks inside ``.zip`` archives and extracts any CSV
     files found so they can be processed like regular files.
+
+    Parameters
+    ----------
+    file_name_pattern : list[str] | None, optional
+        List of patterns to filter file names. When omitted, all CSV files are
+        returned.
     """
 
     csv_files = list(target_path.rglob("*.csv"))
