@@ -4,21 +4,24 @@ from pathlib import Path
 import pyarrow.dataset as ds
 
 def search_csv_file(target_path: Path, file_name_pattern: list[str]) -> list[Path]:
-    target_csv_files = []
+    """Search for CSV files matching the given patterns under ``target_path``."""
 
-    csv_files = target_path.rglob("*.csv")
+    # ``Path.rglob`` returns a generator; convert to a list so we can reliably
+    # check for emptiness and iterate multiple times.
+    csv_files = list(target_path.rglob("*.csv"))
 
     if not csv_files:
         print(f"No CSV files found in {target_path}")
-        return target_csv_files
-    if len(file_name_pattern) == 0:
-        target_csv_files = list(csv_files)
-        return target_csv_files
-    else:
-        for cscv_file in csv_files:
-            if any(pat in cscv_file.name for pat in file_name_pattern):
-                target_csv_files.append(cscv_file)
-        return target_csv_files
+        return []
+
+    if not file_name_pattern:
+        return csv_files
+
+    matched_files = []
+    for csv_file in csv_files:
+        if any(pat in csv_file.name for pat in file_name_pattern):
+            matched_files.append(csv_file)
+    return matched_files
 
 
 
