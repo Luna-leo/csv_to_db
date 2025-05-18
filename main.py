@@ -128,47 +128,67 @@ def register_header_to_duckdb(header_lf: pl.LazyFrame, db_path: Path, table_name
     db_path.parent.mkdir(parents=True, exist_ok=True)
     
     # DuckDBに接続
-    with duckdb.connect(db_path) as con:
-        # DataFrame化
-        header_df = header_lf.collect().to_pandas()
-        # テーブル作成（なければ）
-        con.execute(f"""
-            CREATE TABLE IF NOT EXISTS {table_name} (
-                param_id TEXT,
-                param_name TEXT,
-                unit TEXT
-            )
-        """)
-        # 既存データ取得
-        existing_ids = set(con.execute(f"SELECT param_id FROM {table_name}").fetchall())
-        # 未登録データ抽出
-        new_rows = header_df[~header_df["param_id"].isin([row[0] for row in existing_ids])]
-        # 追記
-        if not new_rows.empty:
-            con.executemany(f"INSERT INTO {table_name} VALUES (?, ?, ?)", new_rows.values.tolist())
+
+    con = duckdb.connect(db_path)
+    # DataFrame化
+    header_df = header_lf.collect().to_pandas()
+    # テーブル作成（なければ）
+    con.execute(f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            param_id TEXT,
+            param_name TEXT,
+            unit TEXT
+        )
+    """)
+    # 既存データ取得
+    existing_ids = set(con.execute(f"SELECT param_id FROM {table_name}").fetchall())
+    # 未登録データ抽出
+    new_rows = header_df[~header_df["param_id"].isin([row[0] for row in existing_ids])]
+    # 追記
+    if not new_rows.empty:
+        con.executemany(f"INSERT INTO {table_name} VALUES (?, ?, ?)", new_rows.values.tolist())
+    con.close()
 
 
-def write_parquet_file(lf: pl.LazyFrame, parquet_path: Path, plant_name: str, machine_no: str):
-    """Write sensor data to a partitioned Parquet dataset.
+def write_parquet_file(
+    lf: pl.LazyFrame,
+    parquet_path: Path,
+    plant_name: str,
+    machine_no: str,
+    *,
+    add_date_columns: bool = False,
+) -> None:
+    """Write ``lf`` to ``parquet_path`` partitioned by plant/machine and date.
 
     Parameters
     ----------
-    lf : pl.LazyFrame
-        LazyFrame containing the sensor measurements.
-    parquet_path : Path
-        Destination directory for the Parquet dataset.
-    plant_name : str
-        Plant identifier used for partitioning.
-    machine_no : str
-        Machine identifier used for partitioning.
+    lf:
+        LazyFrame to write. ``year`` and ``month`` columns must be present unless
+        ``add_date_columns`` is ``True``.
+    parquet_path:
+        Destination directory for the partitioned parquet dataset.
+    plant_name, machine_no:
+        Values used to partition the dataset.
+    add_date_columns:
+        When ``True`` ``year`` and ``month`` columns are derived from the
+        ``Datetime`` column before writing.  This should be disabled if these
+        columns were already added upstream.
     """
 
-    lf = lf.with_columns([
-        pl.col("Datetime").dt.year().alias("year"),
-        pl.col("Datetime").dt.month().alias("month"),
-        pl.lit(plant_name).alias("plant_name"),
-        pl.lit(machine_no).alias("machine_no")
-    ])
+    if add_date_columns:
+        lf = lf.with_columns(
+            [
+                pl.col("Datetime").dt.year().alias("year"),
+                pl.col("Datetime").dt.month().alias("month"),
+            ]
+        )
+
+    lf = lf.with_columns(
+        [
+            pl.lit(plant_name).alias("plant_name"),
+            pl.lit(machine_no).alias("machine_no"),
+        ]
+    )
 
     df = lf.collect()
 
