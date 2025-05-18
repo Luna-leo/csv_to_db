@@ -45,6 +45,21 @@ def search_csv_file(target_path: Path, file_name_pattern: list[str]) -> list[Pat
 
 
 def read_pi_file(file_path: Path, encoding="utf-8"):
+    """Read a PI CSV file and return data and header LazyFrames.
+
+    Parameters
+    ----------
+    file_path : Path
+        CSV file exported from the PI system.
+    encoding : str, optional
+        Encoding used to open ``file_path``.
+
+    Returns
+    -------
+    tuple[pl.LazyFrame, pl.LazyFrame]
+        ``(lf, header_lf)`` where ``lf`` contains the sensor data and
+        ``header_lf`` stores parameter id, name and unit information.
+    """
     # ── 1. ヘッダー読み込み（3行） ─────────────────────
     with open(file_path, encoding=encoding) as f:
         header = [next(f) for _ in range(3)]
@@ -90,6 +105,17 @@ def read_pi_file(file_path: Path, encoding="utf-8"):
 
 
 def register_header_to_duckdb(header_lf: pl.LazyFrame, db_path: Path, table_name: str = "param_master"):
+    """Store parameter metadata into a DuckDB table.
+
+    Parameters
+    ----------
+    header_lf : pl.LazyFrame
+        LazyFrame containing ``param_id``, ``param_name`` and ``unit`` columns.
+    db_path : Path
+        DuckDB database file where the table resides.
+    table_name : str, optional
+        Name of the table used to store the metadata.
+    """
     # フォルダ作成
     db_path.parent.mkdir(parents=True, exist_ok=True)
     
@@ -115,7 +141,20 @@ def register_header_to_duckdb(header_lf: pl.LazyFrame, db_path: Path, table_name
     con.close()
 
 
-def write_parquet_file(lf: pl.LazyFrame, parquet_path:Path, plant_name: str, machine_no:str):
+def write_parquet_file(lf: pl.LazyFrame, parquet_path: Path, plant_name: str, machine_no: str):
+    """Write sensor data to a partitioned Parquet dataset.
+
+    Parameters
+    ----------
+    lf : pl.LazyFrame
+        LazyFrame containing the sensor measurements.
+    parquet_path : Path
+        Destination directory for the Parquet dataset.
+    plant_name : str
+        Plant identifier used for partitioning.
+    machine_no : str
+        Machine identifier used for partitioning.
+    """
 
     lf = lf.with_columns([
         pl.col("Datetime").dt.year().alias("year"),
@@ -140,7 +179,15 @@ def write_parquet_file(lf: pl.LazyFrame, parquet_path:Path, plant_name: str, mac
 
 
 def _ensure_processed_table(con: duckdb.DuckDBPyConnection, table_name: str) -> None:
-    """Create the processed files table if it does not exist."""
+    """Create the table used to track processed files.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Active DuckDB connection.
+    table_name : str
+        Name of the history table.
+    """
     con.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
@@ -152,7 +199,22 @@ def _ensure_processed_table(con: duckdb.DuckDBPyConnection, table_name: str) -> 
 
 
 def is_processed(file_path: Path, db_path: Path, table_name: str = "processed_files") -> bool:
-    """Return ``True`` if ``file_path`` is already recorded as processed."""
+    """Check whether a file has already been processed.
+
+    Parameters
+    ----------
+    file_path : Path
+        Target CSV file.
+    db_path : Path
+        DuckDB database storing the history table.
+    table_name : str, optional
+        Name of the table which records processed files.
+
+    Returns
+    -------
+    bool
+        ``True`` when a record for ``file_path`` exists.
+    """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(db_path)
     _ensure_processed_table(con, table_name)
@@ -165,7 +227,17 @@ def is_processed(file_path: Path, db_path: Path, table_name: str = "processed_fi
 
 
 def mark_processed(file_path: Path, db_path: Path, table_name: str = "processed_files") -> None:
-    """Record ``file_path`` as processed with the current timestamp."""
+    """Record that a file has been processed.
+
+    Parameters
+    ----------
+    file_path : Path
+        CSV file that was successfully processed.
+    db_path : Path
+        DuckDB database storing the history table.
+    table_name : str, optional
+        Name of the table used to store the history.
+    """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(db_path)
     _ensure_processed_table(con, table_name)
@@ -185,7 +257,23 @@ def process_csv_files(
     *,
     force: bool = False,
 ) -> None:
-    """Process CSV files and record processed history in DuckDB."""
+    """Process CSV files, store them as Parquet and update history.
+
+    Parameters
+    ----------
+    file_paths : list[Path]
+        CSV files to process.
+    parquet_path : Path
+        Root directory of the output Parquet dataset.
+    plant_name : str
+        Plant identifier used for partitioning.
+    machine_no : str
+        Machine identifier used for partitioning.
+    db_path : Path
+        DuckDB database used for the processed history.
+    force : bool, optional
+        If ``True``, process files even when they are already recorded.
+    """
     for fp in file_paths:
         if not force and is_processed(fp, db_path):
             print(f"skip {fp} (already processed)")
