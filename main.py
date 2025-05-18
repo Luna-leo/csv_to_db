@@ -3,6 +3,7 @@ import duckdb
 from pathlib import Path
 import pyarrow.dataset as ds
 import zipfile
+from datetime import datetime
 
 def search_csv_file(target_path: Path, file_name_pattern: list[str]) -> list[Path]:
     """Search for CSV files matching the given patterns under ``target_path``.
@@ -136,3 +137,60 @@ def write_parquet_file(lf: pl.LazyFrame, parquet_path:Path, plant_name: str, mac
         create_dir=True,
     )
     print(f"write {plant_name}/{machine_no} to parquet")
+
+
+def _ensure_processed_table(con: duckdb.DuckDBPyConnection, table_name: str) -> None:
+    """Create the processed files table if it does not exist."""
+    con.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            file_path TEXT PRIMARY KEY,
+            processed_at TIMESTAMP
+        )
+        """
+    )
+
+
+def is_processed(file_path: Path, db_path: Path, table_name: str = "processed_files") -> bool:
+    """Return ``True`` if ``file_path`` is already recorded as processed."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect(db_path)
+    _ensure_processed_table(con, table_name)
+    result = con.execute(
+        f"SELECT 1 FROM {table_name} WHERE file_path = ?",
+        [str(file_path)],
+    ).fetchone()
+    con.close()
+    return result is not None
+
+
+def mark_processed(file_path: Path, db_path: Path, table_name: str = "processed_files") -> None:
+    """Record ``file_path`` as processed with the current timestamp."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect(db_path)
+    _ensure_processed_table(con, table_name)
+    con.execute(
+        f"INSERT OR REPLACE INTO {table_name} VALUES (?, ?)",
+        [str(file_path), datetime.now()],
+    )
+    con.close()
+
+
+def process_csv_files(
+    file_paths: list[Path],
+    parquet_path: Path,
+    plant_name: str,
+    machine_no: str,
+    db_path: Path,
+    *,
+    force: bool = False,
+) -> None:
+    """Process CSV files and record processed history in DuckDB."""
+    for fp in file_paths:
+        if not force and is_processed(fp, db_path):
+            print(f"skip {fp} (already processed)")
+            continue
+        lf, header_lf = read_pi_file(fp)
+        register_header_to_duckdb(header_lf, db_path)
+        write_parquet_file(lf, parquet_path, plant_name, machine_no)
+        mark_processed(fp, db_path)
