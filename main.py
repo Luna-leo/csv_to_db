@@ -27,12 +27,17 @@ def search_csv_file(
         try:
             with zipfile.ZipFile(zip_path) as zf:
                 for member in zf.namelist():
-                    if not member.lower().endswith(".csv"):
+                    member_path = Path(member)
+                    # skip suspicious paths
+                    if member_path.is_absolute() or ".." in member_path.parts:
+                        print(f"warning: skip invalid path {member} in {zip_path}")
+                        continue
+                    if not member_path.name.lower().endswith(".csv"):
                         continue
                     extracted_dir = zip_path.parent / "__extracted_csvs__" / zip_path.stem
                     extracted_dir.mkdir(parents=True, exist_ok=True)
                     zf.extract(member, path=extracted_dir)
-                    csv_files.append(extracted_dir / member)
+                    csv_files.append(extracted_dir / member_path)
         except zipfile.BadZipFile:
             # skip files that are not valid zip archives
             continue
