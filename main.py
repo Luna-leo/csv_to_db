@@ -404,3 +404,21 @@ def process_targets(
         db_path,
         force=force,
     )
+
+if __name__ == "__main__":
+    targets = [Path("data")]
+    parquet_path = Path("output")
+    plant_name = "plant1"
+    machine_no = "machine1" 
+    db_path = Path("history.db")
+    file_name_pattern = ["2023"]
+    force = False
+    process_targets(
+        targets,
+        parquet_path,
+        plant_name,
+        machine_no,
+        db_path,
+        file_name_pattern=file_name_pattern,
+        force=force,
+    )
