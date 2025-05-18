@@ -2,13 +2,31 @@ import polars as pl
 import duckdb
 from pathlib import Path
 import pyarrow.dataset as ds
+import zipfile
 
 def search_csv_file(target_path: Path, file_name_pattern: list[str]) -> list[Path]:
-    """Search for CSV files matching the given patterns under ``target_path``."""
+    """Search for CSV files matching the given patterns under ``target_path``.
 
-    # ``Path.rglob`` returns a generator; convert to a list so we can reliably
-    # check for emptiness and iterate multiple times.
+    This function also looks inside ``.zip`` archives and extracts any CSV
+    files found so they can be processed like regular files.
+    """
+
     csv_files = list(target_path.rglob("*.csv"))
+
+    # search for zipped CSV files
+    for zip_path in target_path.rglob("*.zip"):
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                for member in zf.namelist():
+                    if not member.lower().endswith(".csv"):
+                        continue
+                    extracted_dir = zip_path.parent / "__extracted_csvs__" / zip_path.stem
+                    extracted_dir.mkdir(parents=True, exist_ok=True)
+                    zf.extract(member, path=extracted_dir)
+                    csv_files.append(extracted_dir / member)
+        except zipfile.BadZipFile:
+            # skip files that are not valid zip archives
+            continue
 
     if not csv_files:
         print(f"No CSV files found in {target_path}")
