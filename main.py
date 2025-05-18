@@ -115,14 +115,45 @@ def register_header_to_duckdb(header_lf: pl.LazyFrame, db_path: Path, table_name
     con.close()
 
 
-def write_parquet_file(lf: pl.LazyFrame, parquet_path:Path, plant_name: str, machine_no:str):
+def write_parquet_file(
+    lf: pl.LazyFrame,
+    parquet_path: Path,
+    plant_name: str,
+    machine_no: str,
+    *,
+    add_date_columns: bool = False,
+) -> None:
+    """Write ``lf`` to ``parquet_path`` partitioned by plant/machine and date.
 
-    lf = lf.with_columns([
-        pl.col("Datetime").dt.year().alias("year"),
-        pl.col("Datetime").dt.month().alias("month"),
-        pl.lit(plant_name).alias("plant_name"),
-        pl.lit(machine_no).alias("machine_no")
-    ])
+    Parameters
+    ----------
+    lf:
+        LazyFrame to write. ``year`` and ``month`` columns must be present unless
+        ``add_date_columns`` is ``True``.
+    parquet_path:
+        Destination directory for the partitioned parquet dataset.
+    plant_name, machine_no:
+        Values used to partition the dataset.
+    add_date_columns:
+        When ``True`` ``year`` and ``month`` columns are derived from the
+        ``Datetime`` column before writing.  This should be disabled if these
+        columns were already added upstream.
+    """
+
+    if add_date_columns:
+        lf = lf.with_columns(
+            [
+                pl.col("Datetime").dt.year().alias("year"),
+                pl.col("Datetime").dt.month().alias("month"),
+            ]
+        )
+
+    lf = lf.with_columns(
+        [
+            pl.lit(plant_name).alias("plant_name"),
+            pl.lit(machine_no).alias("machine_no"),
+        ]
+    )
 
     df = lf.collect()
 
