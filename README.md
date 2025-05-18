@@ -1,13 +1,10 @@
+# csv_to_db
 
-## Features
+このプロジェクトは PI システムから出力された CSV ファイルを解析し、Parquet 形式のデータセットと DuckDB データベースへ変換・登録するためのユーティリティ群を提供します。
 
-- Search function now checks `.zip` archives and extracts any contained CSV
-  files under a `__extracted_csvs__` directory for further processing.
-- When extracting from `.zip` archives, paths containing `..` or absolute paths
-  are skipped with a warning to avoid unintended file writes.
-- Processed file history is stored in DuckDB. The ``process_csv_files``
-  function can skip files that were already processed or reprocess them
-  when ``force=True``.
-- ``process_targets`` gathers CSV files from multiple directories or files
-  (including ``.zip``) and handles conversion, history updates and master table
-  updates in one call.
+## 特徴
+
+- `search_csv_file` 関数は `.zip` アーカイブも検索し、含まれる CSV ファイルを `__extracted_csvs__` ディレクトリに展開して処理します。
+- `.zip` から展開する際、`..` を含むパスや絶対パスは不正な書き込みを避けるために警告を出して無視します。
+- 処理済みファイルの履歴は DuckDB に保存されます。`process_csv_files` は既に処理済みのファイルをスキップするか、`force=True` の場合は再処理できます。
+- `process_targets` は複数のディレクトリやファイル（`.zip` を含む）から CSV を収集し、変換、履歴更新、マスターテーブル更新を一度に実行します。
