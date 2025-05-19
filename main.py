@@ -5,6 +5,8 @@ import pyarrow.dataset as ds
 import zipfile
 from datetime import datetime
 
+from typing import Callable, Dict
+
 def search_csv_file(
     target_path: Path, file_name_pattern: list[str] | None = None
 ) -> list[Path]:
@@ -161,11 +163,26 @@ def read_pi_file(file_path: Path, encoding="utf-8"):
     return lf, header_lf
 
 
+READERS: Dict[str, Callable[[Path, str], tuple[pl.LazyFrame, pl.LazyFrame]]] = {
+    "pi": read_pi_file,
+}
+
+
+def read_file_by_source(file_path: Path, data_source: str, encoding: str = "utf-8"):
+    """Dispatch file reading based on ``data_source``."""
+    try:
+        reader = READERS[data_source.lower()]
+    except KeyError:
+        raise ValueError(f"Unsupported data source: {data_source}") from None
+    return reader(file_path, encoding=encoding)
+
+
 def register_header_to_duckdb(
     header_lf: pl.LazyFrame,
     db_path: Path,
     plant_name: str,
     machine_no: str,
+    data_source: str,
     table_name: str = "param_master",
 ):
     """Store parameter metadata into a DuckDB table.
@@ -193,6 +210,7 @@ def register_header_to_duckdb(
     header_df = header_lf.collect().to_pandas()
     header_df["plant_name"] = plant_name
     header_df["machine_no"] = machine_no
+    header_df["data_source"] = data_source
 
     # テーブル作成（なければ）
     con.execute(
@@ -203,7 +221,8 @@ def register_header_to_duckdb(
             unit TEXT,
             plant_name TEXT,
             machine_no TEXT,
-            PRIMARY KEY(param_id, plant_name, machine_no)
+            data_source TEXT,
+            PRIMARY KEY(param_id, plant_name, machine_no, data_source)
         )
         """
     )
@@ -211,8 +230,8 @@ def register_header_to_duckdb(
     # 既存データ取得
     existing_ids = set(
         con.execute(
-            f"SELECT param_id FROM {table_name} WHERE plant_name = ? AND machine_no = ?",
-            [plant_name, machine_no],
+            f"SELECT param_id FROM {table_name} WHERE plant_name = ? AND machine_no = ? AND data_source = ?",
+            [plant_name, machine_no, data_source],
         ).fetchall()
     )
 
@@ -222,8 +241,8 @@ def register_header_to_duckdb(
     # 追記
     if not new_rows.empty:
         con.executemany(
-            f"INSERT INTO {table_name} VALUES (?, ?, ?, ?, ?)",
-            new_rows[["param_id", "param_name", "unit", "plant_name", "machine_no"]].values.tolist(),
+            f"INSERT INTO {table_name} VALUES (?, ?, ?, ?, ?, ?)",
+            new_rows[["param_id", "param_name", "unit", "plant_name", "machine_no", "data_source"]].values.tolist(),
         )
     con.close()
 
@@ -315,8 +334,9 @@ def _ensure_processed_table(con: duckdb.DuckDBPyConnection, table_name: str) -> 
             file_mtime TIMESTAMP,
             plant_name TEXT,
             machine_no TEXT,
+            data_source TEXT,
             processed_at TIMESTAMP,
-            PRIMARY KEY(file_name, file_mtime, plant_name, machine_no)
+            PRIMARY KEY(file_name, file_mtime, plant_name, machine_no, data_source)
         )
         """
     )
@@ -327,13 +347,14 @@ def is_processed(
     db_path: Path,
     plant_name: str,
     machine_no: str,
+    data_source: str,
     table_name: str = "processed_files",
 ) -> bool:
     """Check whether a file has already been processed.
 
     The history table stores the file name, modification time, ``plant_name``
-    and ``machine_no``.  A record is considered matching when all values are
-    equal.
+    ``machine_no`` and ``data_source``. A record is considered matching when
+    all values are equal.
 
     Parameters
     ----------
@@ -345,6 +366,8 @@ def is_processed(
         Plant identifier used for partitioning.
     machine_no : str
         Machine identifier used for partitioning.
+    data_source : str
+        Identifier for the data format.
     table_name : str, optional
         Name of the table which records processed files.
 
@@ -358,8 +381,8 @@ def is_processed(
     with duckdb.connect(db_path) as con:
         _ensure_processed_table(con, table_name)
         result = con.execute(
-            f"SELECT 1 FROM {table_name} WHERE file_name = ? AND file_mtime = ? AND plant_name = ? AND machine_no = ?",
-            [file_path.name, mtime, plant_name, machine_no],
+            f"SELECT 1 FROM {table_name} WHERE file_name = ? AND file_mtime = ? AND plant_name = ? AND machine_no = ? AND data_source = ?",
+            [file_path.name, mtime, plant_name, machine_no, data_source],
         ).fetchone()
         return result is not None
 
@@ -369,6 +392,7 @@ def mark_processed(
     db_path: Path,
     plant_name: str,
     machine_no: str,
+    data_source: str,
     table_name: str = "processed_files",
 ) -> None:
     """Record that a file has been processed.
@@ -386,6 +410,8 @@ def mark_processed(
         Plant identifier used for partitioning.
     machine_no : str
         Machine identifier used for partitioning.
+    data_source : str
+        Identifier for the data format.
     table_name : str, optional
         Name of the table used to store the history.
     """
@@ -394,8 +420,8 @@ def mark_processed(
         _ensure_processed_table(con, table_name)
         mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
         con.execute(
-            f"INSERT OR REPLACE INTO {table_name} VALUES (?, ?, ?, ?, ?)",
-            [file_path.name, mtime, plant_name, machine_no, datetime.now()],
+            f"INSERT OR REPLACE INTO {table_name} VALUES (?, ?, ?, ?, ?, ?)",
+            [file_path.name, mtime, plant_name, machine_no, data_source, datetime.now()],
         )
 
 
@@ -405,6 +431,7 @@ def process_csv_files(
     plant_name: str,
     machine_no: str,
     db_path: Path,
+    data_source: str,
     *,
     force: bool = False,
 ) -> None:
@@ -422,21 +449,23 @@ def process_csv_files(
         Machine identifier used for partitioning.
     db_path : Path
         DuckDB database used for the processed history.
+    data_source : str
+        Identifier for the data format.
     force : bool, optional
         If ``True``, process files even when they are already recorded.
     """
     for fp in file_paths:
-        if not force and is_processed(fp, db_path, plant_name, machine_no):
+        if not force and is_processed(fp, db_path, plant_name, machine_no, data_source):
             print(f"skip {fp} (already processed)")
             continue
         print(f"processing {fp}")
-        lf, header_lf = read_pi_file(fp)
-        register_header_to_duckdb(header_lf, db_path, plant_name, machine_no)
+        lf, header_lf = read_file_by_source(fp, data_source)
+        register_header_to_duckdb(header_lf, db_path, plant_name, machine_no, data_source)
 
         row_count, column_count = write_parquet_file(
             lf, parquet_path, plant_name, machine_no
         )
-        mark_processed(fp, db_path, plant_name, machine_no)
+        mark_processed(fp, db_path, plant_name, machine_no, data_source)
         print(f"processed {fp}: {row_count} rows, {column_count} columns")
 
 
@@ -446,6 +475,7 @@ def process_targets(
     plant_name: str,
     machine_no: str,
     db_path: Path,
+    data_source: str,
     *,
     file_name_pattern: list[str] | None = None,
     force: bool = False,
@@ -458,6 +488,8 @@ def process_targets(
         Directories or files (CSV/ZIP) to search.
     parquet_path, plant_name, machine_no, db_path : Path/str
         Parameters forwarded to :func:`process_csv_files`.
+    data_source : str
+        Identifier for the data format.
     file_name_pattern : list[str] | None, optional
         Patterns used to filter file names.
     force : bool, optional
@@ -474,6 +506,7 @@ def process_targets(
         plant_name,
         machine_no,
         db_path,
+        data_source,
         force=force,
     )
 
@@ -481,8 +514,9 @@ if __name__ == "__main__":
     targets = [Path("data")]
     parquet_path = Path("output")
     plant_name = "plant1"
-    machine_no = "machine1" 
+    machine_no = "machine1"
     db_path = Path("history.db")
+    data_source = "pi"
     file_name_pattern = ["2023"]
     force = False
     process_targets(
@@ -491,6 +525,7 @@ if __name__ == "__main__":
         plant_name,
         machine_no,
         db_path,
+        data_source,
         file_name_pattern=file_name_pattern,
         force=force,
     )
