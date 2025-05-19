@@ -187,6 +187,9 @@ def register_header_to_duckdb(
 ):
     """Store parameter metadata into a DuckDB table.
 
+    This function also updates ``parameter_id_master`` with any new
+    ``param_id`` values found in ``header_lf``.
+
     Parameters
     ----------
     header_lf : pl.LazyFrame
@@ -243,6 +246,91 @@ def register_header_to_duckdb(
         con.executemany(
             f"INSERT INTO {table_name} VALUES (?, ?, ?, ?, ?, ?)",
             new_rows[["param_id", "param_name", "unit", "plant_name", "machine_no", "data_source"]].values.tolist(),
+        )
+    con.close()
+
+    register_param_id_master(
+        header_lf,
+        db_path,
+        plant_name,
+        machine_no,
+        data_source,
+    )
+
+
+def register_param_id_master(
+    header_lf: pl.LazyFrame,
+    db_path: Path,
+    plant_name: str,
+    machine_no: str,
+    data_source: str,
+    table_name: str = "parameter_id_master",
+) -> None:
+    """Store param_id mapping information into a DuckDB table.
+
+    Parameters
+    ----------
+    header_lf : pl.LazyFrame
+        LazyFrame containing ``param_id`` and ``param_name``.
+    db_path : Path
+        DuckDB database file where the table resides.
+    plant_name : str
+        Plant identifier used for partitioning.
+    machine_no : str
+        Machine identifier used for partitioning.
+    data_source : str
+        Identifier for the data format.
+    table_name : str, optional
+        Name of the table used to store the mapping.
+    """
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    con = duckdb.connect(db_path)
+
+    header_df = header_lf.collect().to_pandas()
+    header_df["plant_name"] = plant_name
+    header_df["machine_no"] = machine_no
+    header_df["data_source"] = data_source
+    header_df["insert_date"] = datetime.now()
+
+    con.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            param_id TEXT,
+            param_name_en TEXT,
+            param_name_ja TEXT,
+            plant_name TEXT,
+            machine_no TEXT,
+            data_source TEXT,
+            insert_date TIMESTAMP,
+            PRIMARY KEY(param_id, plant_name, machine_no, data_source)
+        )
+        """
+    )
+
+    existing_ids = set(
+        con.execute(
+            f"SELECT param_id FROM {table_name} WHERE plant_name = ? AND machine_no = ? AND data_source = ?",
+            [plant_name, machine_no, data_source],
+        ).fetchall()
+    )
+
+    new_rows = header_df[~header_df["param_id"].isin([row[0] for row in existing_ids])]
+
+    if not new_rows.empty:
+        con.executemany(
+            f"INSERT INTO {table_name} VALUES (?, ?, ?, ?, ?, ?, ?)",
+            new_rows[
+                [
+                    "param_id",
+                    "param_name",
+                    "param_name",
+                    "plant_name",
+                    "machine_no",
+                    "data_source",
+                    "insert_date",
+                ]
+            ].values.tolist(),
         )
     con.close()
 
