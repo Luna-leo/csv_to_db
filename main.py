@@ -269,18 +269,27 @@ def _ensure_processed_table(con: duckdb.DuckDBPyConnection, table_name: str) -> 
         CREATE TABLE IF NOT EXISTS {table_name} (
             file_name TEXT,
             file_mtime TIMESTAMP,
+            plant_name TEXT,
+            machine_no TEXT,
             processed_at TIMESTAMP,
-            PRIMARY KEY(file_name, file_mtime)
+            PRIMARY KEY(file_name, file_mtime, plant_name, machine_no)
         )
         """
     )
 
 
-def is_processed(file_path: Path, db_path: Path, table_name: str = "processed_files") -> bool:
+def is_processed(
+    file_path: Path,
+    db_path: Path,
+    plant_name: str,
+    machine_no: str,
+    table_name: str = "processed_files",
+) -> bool:
     """Check whether a file has already been processed.
 
-    The history table stores the file name and modification time.  A record is
-    considered matching when both values are equal.
+    The history table stores the file name, modification time, ``plant_name``
+    and ``machine_no``.  A record is considered matching when all values are
+    equal.
 
     Parameters
     ----------
@@ -288,6 +297,10 @@ def is_processed(file_path: Path, db_path: Path, table_name: str = "processed_fi
         Target CSV file.
     db_path : Path
         DuckDB database storing the history table.
+    plant_name : str
+        Plant identifier used for partitioning.
+    machine_no : str
+        Machine identifier used for partitioning.
     table_name : str, optional
         Name of the table which records processed files.
 
@@ -301,13 +314,19 @@ def is_processed(file_path: Path, db_path: Path, table_name: str = "processed_fi
     with duckdb.connect(db_path) as con:
         _ensure_processed_table(con, table_name)
         result = con.execute(
-            f"SELECT 1 FROM {table_name} WHERE file_name = ? AND file_mtime = ?",
-            [file_path.name, mtime],
+            f"SELECT 1 FROM {table_name} WHERE file_name = ? AND file_mtime = ? AND plant_name = ? AND machine_no = ?",
+            [file_path.name, mtime, plant_name, machine_no],
         ).fetchone()
         return result is not None
 
 
-def mark_processed(file_path: Path, db_path: Path, table_name: str = "processed_files") -> None:
+def mark_processed(
+    file_path: Path,
+    db_path: Path,
+    plant_name: str,
+    machine_no: str,
+    table_name: str = "processed_files",
+) -> None:
     """Record that a file has been processed.
 
     The file name and its last modification time are stored so that the same
@@ -319,6 +338,10 @@ def mark_processed(file_path: Path, db_path: Path, table_name: str = "processed_
         CSV file that was successfully processed.
     db_path : Path
         DuckDB database storing the history table.
+    plant_name : str
+        Plant identifier used for partitioning.
+    machine_no : str
+        Machine identifier used for partitioning.
     table_name : str, optional
         Name of the table used to store the history.
     """
@@ -327,8 +350,8 @@ def mark_processed(file_path: Path, db_path: Path, table_name: str = "processed_
         _ensure_processed_table(con, table_name)
         mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
         con.execute(
-            f"INSERT OR REPLACE INTO {table_name} VALUES (?, ?, ?)",
-            [file_path.name, mtime, datetime.now()],
+            f"INSERT OR REPLACE INTO {table_name} VALUES (?, ?, ?, ?, ?)",
+            [file_path.name, mtime, plant_name, machine_no, datetime.now()],
         )
 
 
@@ -359,13 +382,13 @@ def process_csv_files(
         If ``True``, process files even when they are already recorded.
     """
     for fp in file_paths:
-        if not force and is_processed(fp, db_path):
+        if not force and is_processed(fp, db_path, plant_name, machine_no):
             print(f"skip {fp} (already processed)")
             continue
         lf, header_lf = read_pi_file(fp)
         register_header_to_duckdb(header_lf, db_path)
         write_parquet_file(lf, parquet_path, plant_name, machine_no)
-        mark_processed(fp, db_path)
+        mark_processed(fp, db_path, plant_name, machine_no)
 
 
 def process_targets(
