@@ -272,8 +272,10 @@ def register_param_id_master(
     ----------
     header_lf : pl.LazyFrame
         LazyFrame containing ``param_id`` and ``param_name``.
+
         Both ``param_name_en`` and ``param_name_ja`` are initialized
         with this value when new IDs are registered.
+
     db_path : Path
         DuckDB database file where the table resides.
     plant_name : str
@@ -297,6 +299,7 @@ def register_param_id_master(
     # 初期登録時は英語・日本語ともに CSV の param_name を流用する
     header_df["param_name_en"] = header_df["param_name"]
     header_df["param_name_ja"] = header_df["param_name"]
+
 
     con.execute(
         f"""
