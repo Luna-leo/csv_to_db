@@ -235,7 +235,7 @@ def write_parquet_file(
     machine_no: str,
     *,
     add_date_columns: bool = False,
-) -> None:
+) -> tuple[int, int]:
     """Write ``lf`` to ``parquet_path`` partitioned by plant/machine and date.
 
     Parameters
@@ -251,6 +251,11 @@ def write_parquet_file(
         When ``True`` ``year`` and ``month`` columns are derived from the
         ``Datetime`` column before writing.  This should be disabled if these
         columns were already added upstream.
+    Returns
+    -------
+    tuple[int, int]
+        ``(row_count, column_count)`` with the number of rows and columns
+        written to the Parquet dataset.
     """
 
     if add_date_columns:
@@ -269,6 +274,8 @@ def write_parquet_file(
     )
 
     df = lf.collect()
+    row_count = df.height
+    column_count = df.width
 
     tbl = df.to_arrow()
 
@@ -280,7 +287,8 @@ def write_parquet_file(
         existing_data_behavior="overwrite_or_ignore",
         create_dir=True,
     )
-    print(f"write {plant_name}/{machine_no} to parquet")
+
+    return row_count, column_count
 
 
 def _ensure_processed_table(con: duckdb.DuckDBPyConnection, table_name: str) -> None:
@@ -414,10 +422,14 @@ def process_csv_files(
         if not force and is_processed(fp, db_path, plant_name, machine_no):
             print(f"skip {fp} (already processed)")
             continue
+        print(f"processing {fp}")
         lf, header_lf = read_pi_file(fp)
         register_header_to_duckdb(header_lf, db_path, plant_name, machine_no)
-        write_parquet_file(lf, parquet_path, plant_name, machine_no)
+        row_count, column_count = write_parquet_file(
+            lf, parquet_path, plant_name, machine_no
+        )
         mark_processed(fp, db_path, plant_name, machine_no)
+        print(f"processed {fp}: {row_count} rows, {column_count} columns")
 
 
 def process_targets(
