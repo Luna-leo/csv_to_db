@@ -161,7 +161,13 @@ def read_pi_file(file_path: Path, encoding="utf-8"):
     return lf, header_lf
 
 
-def register_header_to_duckdb(header_lf: pl.LazyFrame, db_path: Path, table_name: str = "param_master"):
+def register_header_to_duckdb(
+    header_lf: pl.LazyFrame,
+    db_path: Path,
+    plant_name: str,
+    machine_no: str,
+    table_name: str = "param_master",
+):
     """Store parameter metadata into a DuckDB table.
 
     Parameters
@@ -170,6 +176,10 @@ def register_header_to_duckdb(header_lf: pl.LazyFrame, db_path: Path, table_name
         LazyFrame containing ``param_id``, ``param_name`` and ``unit`` columns.
     db_path : Path
         DuckDB database file where the table resides.
+    plant_name : str
+        Plant identifier used for partitioning.
+    machine_no : str
+        Machine identifier used for partitioning.
     table_name : str, optional
         Name of the table used to store the metadata.
     """
@@ -181,21 +191,40 @@ def register_header_to_duckdb(header_lf: pl.LazyFrame, db_path: Path, table_name
     con = duckdb.connect(db_path)
     # DataFrame化
     header_df = header_lf.collect().to_pandas()
+    header_df["plant_name"] = plant_name
+    header_df["machine_no"] = machine_no
+
     # テーブル作成（なければ）
-    con.execute(f"""
+    con.execute(
+        f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
             param_id TEXT,
             param_name TEXT,
-            unit TEXT
+            unit TEXT,
+            plant_name TEXT,
+            machine_no TEXT,
+            PRIMARY KEY(param_id, plant_name, machine_no)
         )
-    """)
+        """
+    )
+
     # 既存データ取得
-    existing_ids = set(con.execute(f"SELECT param_id FROM {table_name}").fetchall())
+    existing_ids = set(
+        con.execute(
+            f"SELECT param_id FROM {table_name} WHERE plant_name = ? AND machine_no = ?",
+            [plant_name, machine_no],
+        ).fetchall()
+    )
+
     # 未登録データ抽出
     new_rows = header_df[~header_df["param_id"].isin([row[0] for row in existing_ids])]
+
     # 追記
     if not new_rows.empty:
-        con.executemany(f"INSERT INTO {table_name} VALUES (?, ?, ?)", new_rows.values.tolist())
+        con.executemany(
+            f"INSERT INTO {table_name} VALUES (?, ?, ?, ?, ?)",
+            new_rows[["param_id", "param_name", "unit", "plant_name", "machine_no"]].values.tolist(),
+        )
     con.close()
 
 
@@ -386,7 +415,7 @@ def process_csv_files(
             print(f"skip {fp} (already processed)")
             continue
         lf, header_lf = read_pi_file(fp)
-        register_header_to_duckdb(header_lf, db_path)
+        register_header_to_duckdb(header_lf, db_path, plant_name, machine_no)
         write_parquet_file(lf, parquet_path, plant_name, machine_no)
         mark_processed(fp, db_path, plant_name, machine_no)
 
