@@ -26,8 +26,9 @@ def load_sensor_data(
 ) -> pl.DataFrame:
     """Load records between ``start`` and ``end`` from a partitioned dataset."""
 
-    # ディレクトリ名から year/month をパースさせる。 ``write_parquet_file`` では
-    # Hive 形式でパーティション分割しているため ``flavor="hive"`` を使用する
+    # ディレクトリ名から year/month をパースさせる。データセットは Hive 形式
+    # ではなく Directory 形式で保存されているため ``flavor="directory"`` を
+    # 使用する
     schema = pa.schema(
         [
             ("plant_name", pa.string()),
@@ -41,9 +42,7 @@ def load_sensor_data(
     dataset = ds.dataset(
         root,
         format="parquet",
-        # ``flavor="directory"`` を指定すると古い pyarrow では "unsupported flavor"
-        # エラーになるため、Hive 形式を明示する
-        partitioning=ds.partitioning(schema, flavor="hive"),
+        partitioning=ds.partitioning(schema, flavor="directory"),
     )
 
     start_expr = _to_expr(start)
