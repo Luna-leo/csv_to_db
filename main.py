@@ -427,14 +427,25 @@ def write_parquet_file(
             except Exception:
                 continue
 
-    # 1.5) 新規データを既存スキーマへ合わせる
-    if existing_metas:
-        write_schema = pa.unify_schemas(
-            [tbl.schema] + [m.schema.to_arrow_schema() for m in existing_metas]
-        )
-        tbl = tbl.cast(write_schema)
-    else:
-        write_schema = tbl.schema
+    # 1b) 既存メタデータとテーブルスキーマを統合
+    write_schema = pa.unify_schemas(
+        [tbl.schema] + [m.schema.to_arrow_schema() for m in existing_metas]
+    )
+
+    def _cast_table(table: pa.Table, schema: pa.Schema) -> pa.Table:
+        arrays: list[pa.Array] = []
+        names = set(table.schema.names)
+        for field in schema:
+            if field.name in names:
+                arr = table[field.name]
+                if not arr.type.equals(field.type):
+                    arr = arr.cast(field.type)
+            else:
+                arr = pa.nulls(table.num_rows, type=field.type)
+            arrays.append(arr)
+        return pa.Table.from_arrays(arrays, schema=schema)
+
+    tbl = _cast_table(tbl, write_schema)
 
 
     # 1) 書き出しつつ各ファイルのメタデータを収集
@@ -452,6 +463,7 @@ def write_parquet_file(
         existing_data_behavior="overwrite_or_ignore",
         create_dir=True,
         file_visitor=_visitor,
+        schema=write_schema,
     )
 
     # 2) 既存と新規のメタデータからスキーマを統合
