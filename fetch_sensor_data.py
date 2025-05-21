@@ -57,7 +57,7 @@ def load_dataset(
     if selected_columns:
         selected_columns = ["Datetime"] + selected_columns
         # カラムの存在有無確認して存在するカラムだけを選択、存在しないカラムはメッセージで表示
-        existing_columns = lf.columns
+        existing_columns = lf.collect_schema().names()
         missing_columns = set(selected_columns) - set(existing_columns)
         if missing_columns:
             print(f"Warning: The following columns are not found in the dataset: {missing_columns}")
