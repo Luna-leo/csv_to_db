@@ -10,8 +10,8 @@ def _to_dt(ts):  # str → datetime 変換ユーティリティ
 def load_dataset(
     root: str | Path,
     *,
-    plant_name: str | None = None,
-    machine_no: str | None = None,
+    plant_name: str ,
+    machine_no: str,
     start: str | datetime | None = None,
     end:   str | datetime | None = None,
     selected_columns: list[str] | None = None,
