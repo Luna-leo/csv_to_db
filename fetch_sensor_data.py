@@ -55,6 +55,7 @@ def load_dataset(
     lf = lf.filter(cond)
 
     if selected_columns:
+        selected_columns = ["Datetime"] + selected_columns
         lf = lf.select(selected_columns)
 
     return lf.collect()
