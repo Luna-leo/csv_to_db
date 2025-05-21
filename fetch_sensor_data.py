@@ -23,7 +23,7 @@ def load_sensor_data(
     ds_parquet = ds.dataset(
         root,
         format="parquet",
-        partitioning=ds.partitioning(schema, flavor="directory")
+        partitioning=ds.partitioning(schema)
     )
 
     lf = pl.scan_pyarrow_dataset(ds_parquet)

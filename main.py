@@ -391,6 +391,17 @@ def write_parquet_file(
         ]
     )
 
+    # ── 数値列 → Float64（year/month は除外） ───────────────
+    numeric_cols = [
+        c for c, dt in lf.schema.items()
+        if dt in pl.NUMERIC_DTYPES and c not in {"year", "month"}
+    ]
+    if numeric_cols:                       # 空リストでも OK だが念のため
+        lf = lf.with_columns(
+            pl.col(numeric_cols).cast(pl.Float64)
+        )
+
+
     df = lf.collect()
     row_count = df.height
 
