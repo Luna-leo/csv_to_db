@@ -415,7 +415,7 @@ def write_parquet_file(
 
     # 1) 既存メタデータ収集 (plant_name 単位で管理する)
     existing_metas: list[pq.FileMetaData] = []
-    plant_dir = parquet_path / f"plant_name={plant_name}"
+    plant_dir = parquet_path / plant_name
     meta_file = plant_dir / "_metadata"
     if meta_file.exists():
         pf = pq.ParquetFile(meta_file)
