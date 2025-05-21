@@ -1,7 +1,16 @@
+"""Utility to query sensor data stored as a partitioned Parquet dataset."""
+
 from datetime import datetime
 from pathlib import Path
-import pyarrow as pa, pyarrow.dataset as ds
+
+import pyarrow as pa
+import pyarrow.dataset as ds
 import polars as pl
+
+
+def _to_expr(value: str | datetime) -> pl.Expr:
+    """Convert ``value`` to a Polars expression."""
+    return pl.datetime(value) if isinstance(value, str) else pl.lit(value)
 
 def load_sensor_data(
     root: str | Path,
@@ -10,31 +19,31 @@ def load_sensor_data(
     plant: str | None = None,
     machine: str | None = None,
 ) -> pl.DataFrame:
-    """月までのディレクトリ-パーティション + Datetime 列での範囲フィルタ"""
+    """Load records between ``start`` and ``end`` from a partitioned dataset."""
 
     # ディレクトリ名 → year/month をパースさせる
-    schema = pa.schema([
-        ("plant_name", pa.string()),
-        ("machine_no", pa.string()),
-        ("year", pa.int16()),
-        ("month", pa.int8()),
-    ])
-
-    ds_parquet = ds.dataset(
-        root,
-        format="parquet",
-        partitioning=ds.partitioning(schema, flavor="directory")
+    schema = pa.schema(
+        [
+            ("plant_name", pa.string()),
+            ("machine_no", pa.string()),
+            ("year", pa.int16()),
+            ("month", pa.int8()),
+        ]
     )
 
-    lf = pl.scan_pyarrow_dataset(ds_parquet)
+    root = Path(root)
+    dataset = ds.dataset(
+        root,
+        format="parquet",
+        partitioning=ds.partitioning(schema, flavor="directory"),
+    )
 
-    # 文字列でも datetime でも OK
-    if isinstance(start, str):
-        start = pl.datetime(start)
-    if isinstance(end, str):
-        end = pl.datetime(end)
+    start_expr = _to_expr(start)
+    end_expr = _to_expr(end)
 
-    cond = (pl.col("Datetime").is_between(start, end, closed="both"))
+    lf = pl.scan_pyarrow_dataset(dataset)
+
+    cond = pl.col("Datetime").is_between(start_expr, end_expr, closed="both")
     if plant:
         cond &= pl.col("plant_name") == plant
     if machine:
