@@ -404,82 +404,20 @@ def write_parquet_file(
         )
     )
 
-
     df = lf.collect()
-    row_count = df.height
 
+    row_count = df.height
     column_count = df.width
 
-
     tbl = df.to_arrow()
-
-    # 1) 既存メタデータ収集 (plant_name 単位で管理する)
-    existing_metas: list[pq.FileMetaData] = []
-    plant_dir = parquet_path / plant_name
-    meta_file = plant_dir / "_metadata"
-    if meta_file.exists():
-        pf = pq.ParquetFile(meta_file)
-        existing_metas.append(pf.metadata)
-    elif plant_dir.exists():
-        for p in plant_dir.rglob("*.parquet"):
-            try:
-                pf = pq.ParquetFile(p)
-                existing_metas.append(pf.metadata)
-            except Exception:
-                continue
-
-    # 1b) 既存メタデータとテーブルスキーマを統合
-    write_schema = pa.unify_schemas(
-        [tbl.schema] + [m.schema.to_arrow_schema() for m in existing_metas]
-    )
-
-    def _cast_table(table: pa.Table, schema: pa.Schema) -> pa.Table:
-        arrays: list[pa.Array] = []
-        names = set(table.schema.names)
-        for field in schema:
-            if field.name in names:
-                arr = table[field.name]
-                if not arr.type.equals(field.type):
-                    arr = arr.cast(field.type)
-            else:
-                arr = pa.nulls(table.num_rows, type=field.type)
-            arrays.append(arr)
-        return pa.Table.from_arrays(arrays, schema=schema)
-
-    tbl = _cast_table(tbl, write_schema)
-
-
-    # 1) 書き出しつつ各ファイルのメタデータを収集
-    meta_collector: list[pq.FileMetaData] = []
-
-    def _visitor(written_file: ds.WrittenFile):
-        meta_collector.append(written_file.metadata)
 
     ds.write_dataset(
         data=tbl,
         base_dir=parquet_path,
         format="parquet",
-        schema=write_schema,
         partitioning=["plant_name", "machine_no", "year", "month"],
         existing_data_behavior="overwrite_or_ignore",
         create_dir=True,
-        file_visitor=_visitor,
-    )
-
-    # 2) 既存と新規のメタデータからスキーマを統合
-    combined_metas = existing_metas + meta_collector
-    unified_schema = pa.unify_schemas(
-        [m.schema.to_arrow_schema() for m in combined_metas]
-    )
-
-    # 3) スキーマのみ
-    pq.write_metadata(unified_schema, plant_dir / "_common_metadata")
-
-    # 4) スキーマ＋統計入り (全ファイル分)
-    pq.write_metadata(
-        unified_schema,
-        plant_dir / "_metadata",
-        metadata_collector=combined_metas,
     )
 
     return row_count, column_count
