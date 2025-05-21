@@ -5,6 +5,7 @@ import pyarrow.dataset as ds
 import zipfile
 from datetime import datetime
 from polars import selectors as cs  
+import pyarrow.parquet as pq
 
 from typing import Callable, Dict
 
@@ -411,15 +412,28 @@ def write_parquet_file(
 
     tbl = df.to_arrow()
 
+    # 1) 書き出しつつ各ファイルのメタデータを収集
+    meta_collector: list[pq.FileMetaData] = []
+    
     ds.write_dataset(
         data=tbl,
-        base_dir = parquet_path,
+        base_dir=parquet_path,
         format="parquet",
         partitioning=["plant_name", "machine_no", "year", "month"],
         existing_data_behavior="overwrite_or_ignore",
         create_dir=True,
+        metadata_collector=meta_collector,
     )
 
+    # 2) スキーマのみ
+    pq.write_metadata(tbl.schema, parquet_path / "_common_metadata")
+
+    # 3) スキーマ＋統計入り
+    pq.write_metadata(
+        tbl.schema,
+        parquet_path / "_metadata",
+        metadata_collector=meta_collector,
+    )
 
     return row_count, column_count
 
