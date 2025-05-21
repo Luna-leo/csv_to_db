@@ -1,7 +1,18 @@
+"""Utility to query sensor data stored as a partitioned Parquet dataset."""
+
 from datetime import datetime
 from pathlib import Path
-import pyarrow as pa, pyarrow.dataset as ds
+
+import pyarrow as pa
+import pyarrow.dataset as ds
 import polars as pl
+
+
+def _to_datetime(value: str | datetime) -> datetime:
+    """Normalize ``value`` to ``datetime``."""
+    if isinstance(value, str):
+        return datetime.fromisoformat(value)
+    return value
 
 def load_sensor_data(
     root: str | Path,
@@ -10,34 +21,57 @@ def load_sensor_data(
     plant: str | None = None,
     machine: str | None = None,
 ) -> pl.DataFrame:
-    """月までのディレクトリ-パーティション + Datetime 列での範囲フィルタ"""
+    """Load records between ``start`` and ``end`` from a partitioned dataset.
 
-    # ディレクトリ名 → year/month をパースさせる
-    schema = pa.schema([
-        ("plant_name", pa.string()),
-        ("machine_no", pa.string()),
-        ("year", pa.int16()),
-        ("month", pa.int8()),
-    ])
+    On some datasets integer columns may contain floating point values which
+    causes ``pyarrow`` to raise ``ArrowInvalid`` when materializing the data.
+    To avoid this issue all integer columns (except the partitioning columns)
+    are promoted to ``Float64`` before converting to a :class:`polars.DataFrame`.
+    """
 
-    ds_parquet = ds.dataset(
+    # ディレクトリ名から year/month をパースさせる。データセットは Hive 形式
+    # ではなく Directory 形式で保存されているため ``flavor="directory"`` を
+    # 使用する
+    schema = pa.schema(
+        [
+            ("plant_name", pa.string()),
+            ("machine_no", pa.string()),
+            ("year", pa.int16()),
+            ("month", pa.int8()),
+        ]
+    )
+
+    root = Path(root)
+    dataset = ds.dataset(
         root,
         format="parquet",
         partitioning=ds.partitioning(schema)
     )
 
-    lf = pl.scan_pyarrow_dataset(ds_parquet)
+    start_dt = _to_datetime(start)
+    end_dt = _to_datetime(end)
 
-    # 文字列でも datetime でも OK
-    if isinstance(start, str):
-        start = pl.datetime(start)
-    if isinstance(end, str):
-        end = pl.datetime(end)
-
-    cond = (pl.col("Datetime").is_between(start, end, closed="both"))
+    # Build pyarrow.dataset filter expression first. Using PyArrow directly
+    # allows us to cast the resulting table before handing it over to Polars
+    # which prevents type mismatches.
+    cond = (
+        (ds.field("Datetime") >= pa.scalar(start_dt))
+        & (ds.field("Datetime") <= pa.scalar(end_dt))
+    )
     if plant:
-        cond &= pl.col("plant_name") == plant
+        cond &= ds.field("plant_name") == plant
     if machine:
-        cond &= pl.col("machine_no") == machine
+        cond &= ds.field("machine_no") == machine
 
-    return lf.filter(cond).collect()
+    table = dataset.to_table(filter=cond)
+
+    # Promote integer columns to Float64, excluding partition columns.
+    new_fields: list[pa.Field] = []
+    for f in table.schema:
+        if pa.types.is_integer(f.type) and f.name not in {"year", "month"}:
+            new_fields.append(pa.field(f.name, pa.float64()))
+        else:
+            new_fields.append(f)
+    table = table.cast(pa.schema(new_fields))
+
+    return pl.from_arrow(table)
