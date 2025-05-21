@@ -433,6 +433,7 @@ def write_parquet_file(
     unified_schema = pa.unify_schemas(
         [m.schema.to_arrow_schema() for m in meta_collector],
         promote_options="mixed",
+
     )
 
     # 3) スキーマのみ
