@@ -7,6 +7,7 @@ import zipfile
 from datetime import datetime
 from polars import selectors as cs  
 import pyarrow.parquet as pq
+from __future__ import annotations
 
 from typing import Callable, Dict
 
@@ -616,6 +617,88 @@ def process_targets(
         data_source,
         force=force,
     )
+
+
+
+
+# ── 補助：str → datetime (naive) へ統一 ──────────────────────────
+def _to_dt(ts: str | datetime) -> datetime:
+    return ts if isinstance(ts, datetime) else datetime.fromisoformat(ts)
+
+def load_dataset(
+    root: str | Path,
+    *,
+    plant_name: str | None = None,
+    machine_no: str | None = None,
+    start: str | datetime | None = None,     # 例: "2024-11-01 00:00:00"
+    end:   str | datetime | None = None,     # 例: "2024-11-30 23:59:59"
+    selected_columns: list[str] | None = None,  # None=全列
+) -> pl.DataFrame:
+    """
+    Directory-partitioned Parquet を条件付きで読み込み、
+    Datetime 列の期間フィルタも同時に適用する。
+
+    パス階層  : <root>/<plant_name>/<machine_no>/<year>/<month>/*.parquet
+    Datetime列: 各 Parquet の中に ISO 形式 / timestamp 型で存在している前提
+    """
+
+    root = Path(root)
+
+    # ---- 1) Partitioning 定義（Directory 形式） --------------------
+    part_schema = pa.schema(
+        [
+            ("plant_name", pa.string()),
+            ("machine_no", pa.string()),
+            ("year", pa.int16()),
+            ("month", pa.int8()),
+        ]
+    )
+    partitioning = ds.partitioning(part_schema)
+
+    # ---- 2) Arrow Dataset を構築（パーティション列で粗フィルタ） ----
+    #      Arrow 側の filter でディレクトリ単位プルーニングが効く
+    ds_filters = []
+    if plant_name:
+        ds_filters.append(ds.field("plant_name") == plant_name)
+    if machine_no:
+        ds_filters.append(ds.field("machine_no") == machine_no)
+
+    # 年月は start/end があれば大まかに絞っておく（任意）
+    if start or end:
+        if start:
+            sdt = _to_dt(start)
+            ds_filters.append(ds.field("year") > sdt.year - 1)  # 粗い下限
+        if end:
+            edt = _to_dt(end)
+            ds_filters.append(ds.field("year") < edt.year + 1)  # 粗い上限
+
+    ds_parquet = ds.dataset(
+        root,
+        format="parquet",
+        partitioning=partitioning,
+        filter=ds_filters[0] & ds_filters[1] if len(ds_filters) == 2
+        else ds_filters[0]
+        if ds_filters
+        else None,
+    )
+
+    # ---- 3) Polars lazy スキャン → 詳細フィルタ --------------------
+    lf = pl.scan_pyarrow_dataset(ds_parquet)
+
+    # Datetime 範囲フィルタ（Polars 側：行グループ内でさらに絞り込み）
+    if start:
+        lf = lf.filter(pl.col("Datetime") >= _to_dt(start))
+    if end:
+        lf = lf.filter(pl.col("Datetime") <= _to_dt(end))
+
+    # 必要列だけ選択
+    if selected_columns:
+        lf = lf.select(selected_columns)
+
+    return lf.collect()  # pl.DataFrame を返す
+
+
+
 
 if __name__ == "__main__":
     targets = [Path("data")]
