@@ -625,6 +625,7 @@ def process_targets(
 def _to_dt(ts: str | datetime) -> datetime:
     return ts if isinstance(ts, datetime) else datetime.fromisoformat(ts)
 
+
 def load_dataset(
     root: str | Path,
     *,
