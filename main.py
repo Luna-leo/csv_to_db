@@ -620,14 +620,6 @@ def process_targets(
 
 
 
-
-# 補助：str → datetime
-def _to_dt(ts: str | datetime | None) -> datetime | None:
-    if ts is None:
-        return None
-    return ts if isinstance(ts, datetime) else datetime.fromisoformat(ts)
-
-
 def load_dataset(
     root: str | Path,
     *,
@@ -637,66 +629,45 @@ def load_dataset(
     end:   str | datetime | None = None,
     selected_columns: list[str] | None = None,
 ) -> pl.DataFrame:
+    """Directory-partitioned Parquet から条件付きで読み込む"""
 
-    root = Path(root)
-
-    # ── 1. DirectoryPartitioning ------------------------------------------------
-    part_schema = pa.schema([
-        ("plant_name", pa.string()),
-        ("machine_no", pa.string()),
-        ("year", pa.int16()),
-        ("month", pa.int8()),
-    ])
-
+    # ── 1. Arrow Dataset ───────────────────────────────────────────
+    part_schema = pa.schema(
+        [
+            # ("plant_name", pa.string()),
+            ("machine_no", pa.string()),
+            ("year", pa.int16()),
+            ("month", pa.int8()),
+        ]
+    )
     dataset = ds.dataset(
-        root,
+        root / plant_name,
         format="parquet",
-        partitioning=ds.partitioning(part_schema)
+        partitioning=ds.partitioning(part_schema),
     )
 
-    # ── 2. Arrow 側フィルタ (年・月・plant) --------------------------------------
-    arrow_expr = None
-    def _add(expr):
-        nonlocal arrow_expr
-        arrow_expr = expr if arrow_expr is None else arrow_expr & expr
-
+    # ── 2. Polars 式で row_filter を組み立て ─────────────────────
+    rf = pl.lit(True)
     if plant_name:
-        _add(ds.field("plant_name") == plant_name)
+        rf &= pl.col("plant_name") == plant_name
     if machine_no:
-        _add(ds.field("machine_no") == machine_no)
-
-    # 年月に基づく粗いパーティション除外
-    if start or end:
-        sdt = _to_dt(start) if start else None
-        edt = _to_dt(end)   if end   else None
-
-        if sdt:
-            _add(ds.field("year") >  sdt.year - 1)   # 年下限（緩め）
-        if edt:
-            _add(ds.field("year") <  edt.year + 1)   # 年上限（緩め})
-
-        # 同一年であれば month も between に
-        if sdt and edt and sdt.year == edt.year:
-            _add(ds.field("month").between(sdt.month, edt.month))
-        else:
-            if sdt:
-                _add((ds.field("year") == sdt.year) & (ds.field("month") >= sdt.month))
-            if edt:
-                _add((ds.field("year") == edt.year) & (ds.field("month") <= edt.month))
-
-    # ── 3. Polars lazy スキャン（predicate に Arrow 式を渡す） ------------------
-    lf = pl.scan_pyarrow_dataset(dataset, predicate=arrow_expr)
-
-    # Datetime 列に対する秒単位の絞り込みは Polars 式で（Arrow へ push-down される）
+        rf &= pl.col("machine_no") == machine_no
     if start:
-        lf = lf.filter(pl.col("Datetime") >= _to_dt(start))
+        rf &= pl.col("Datetime") >= _to_dt(start)
     if end:
-        lf = lf.filter(pl.col("Datetime") <= _to_dt(end))
+        rf &= pl.col("Datetime") <= _to_dt(end)
+
+    # ── 3. lazy scan + フィルタ + 列選択 ──────────────────────────
+    lf = pl.scan_pyarrow_dataset(dataset, row_filter=rf)
 
     if selected_columns:
         lf = lf.select(selected_columns)
 
     return lf.collect()
+
+
+def _to_dt(ts):
+    return ts if isinstance(ts, datetime) else datetime.fromisoformat(ts)
 
 
 if __name__ == "__main__":
