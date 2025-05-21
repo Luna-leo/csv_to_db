@@ -2,6 +2,7 @@ import polars as pl
 import duckdb
 from pathlib import Path
 import pyarrow.dataset as ds
+import pyarrow as pa
 import zipfile
 from datetime import datetime
 from polars import selectors as cs  
@@ -414,7 +415,10 @@ def write_parquet_file(
 
     # 1) 書き出しつつ各ファイルのメタデータを収集
     meta_collector: list[pq.FileMetaData] = []
-    
+
+    def _visitor(written_file: ds.WrittenFile):
+        meta_collector.append(written_file.metadata)
+
     ds.write_dataset(
         data=tbl,
         base_dir=parquet_path,
@@ -422,15 +426,20 @@ def write_parquet_file(
         partitioning=["plant_name", "machine_no", "year", "month"],
         existing_data_behavior="overwrite_or_ignore",
         create_dir=True,
-        metadata_collector=meta_collector,
+        file_visitor=_visitor,
     )
 
-    # 2) スキーマのみ
-    pq.write_metadata(tbl.schema, parquet_path / "_common_metadata")
+    # 2) スキーマを統合
+    unified_schema = pa.unify_schemas(
+        [m.schema for m in meta_collector], promote_options="mixed"
+    )
 
-    # 3) スキーマ＋統計入り
+    # 3) スキーマのみ
+    pq.write_metadata(unified_schema, parquet_path / "_common_metadata")
+
+    # 4) スキーマ＋統計入り
     pq.write_metadata(
-        tbl.schema,
+        unified_schema,
         parquet_path / "_metadata",
         metadata_collector=meta_collector,
     )
