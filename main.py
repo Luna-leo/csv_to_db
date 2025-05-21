@@ -431,7 +431,9 @@ def write_parquet_file(
 
     # 2) スキーマを統合
     unified_schema = pa.unify_schemas(
+
         [m.schema.to_arrow_schema() for m in meta_collector]
+
     )
 
     # 3) スキーマのみ
