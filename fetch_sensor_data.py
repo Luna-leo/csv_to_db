@@ -8,14 +8,11 @@ import pyarrow.dataset as ds
 import polars as pl
 
 
-def _to_expr(value: str | datetime) -> pl.Expr:
-    """Convert ``value`` to a Polars expression."""
+def _to_datetime(value: str | datetime) -> datetime:
+    """Normalize ``value`` to ``datetime``."""
     if isinstance(value, str):
-        # ``pl.datetime`` requires numeric ``year``/``month``/``day`` arguments.
-        # For convenience accept ISO formatted strings and convert them to
-        # ``datetime`` objects first.
-        value = datetime.fromisoformat(value)
-    return pl.lit(value)
+        return datetime.fromisoformat(value)
+    return value
 
 def load_sensor_data(
     root: str | Path,
@@ -24,7 +21,13 @@ def load_sensor_data(
     plant: str | None = None,
     machine: str | None = None,
 ) -> pl.DataFrame:
-    """Load records between ``start`` and ``end`` from a partitioned dataset."""
+    """Load records between ``start`` and ``end`` from a partitioned dataset.
+
+    On some datasets integer columns may contain floating point values which
+    causes ``pyarrow`` to raise ``ArrowInvalid`` when materializing the data.
+    To avoid this issue all integer columns (except the partitioning columns)
+    are promoted to ``Float64`` before converting to a :class:`polars.DataFrame`.
+    """
 
     # ディレクトリ名から year/month をパースさせる。データセットは Hive 形式
     # ではなく Directory 形式で保存されているため ``flavor="directory"`` を
@@ -45,15 +48,30 @@ def load_sensor_data(
         partitioning=ds.partitioning(schema, flavor="directory"),
     )
 
-    start_expr = _to_expr(start)
-    end_expr = _to_expr(end)
+    start_dt = _to_datetime(start)
+    end_dt = _to_datetime(end)
 
-    lf = pl.scan_pyarrow_dataset(dataset)
-
-    cond = pl.col("Datetime").is_between(start_expr, end_expr, closed="both")
+    # Build pyarrow.dataset filter expression first. Using PyArrow directly
+    # allows us to cast the resulting table before handing it over to Polars
+    # which prevents type mismatches.
+    cond = (
+        (ds.field("Datetime") >= pa.scalar(start_dt))
+        & (ds.field("Datetime") <= pa.scalar(end_dt))
+    )
     if plant:
-        cond &= pl.col("plant_name") == plant
+        cond &= ds.field("plant_name") == plant
     if machine:
-        cond &= pl.col("machine_no") == machine
+        cond &= ds.field("machine_no") == machine
 
-    return lf.filter(cond).collect()
+    table = dataset.to_table(filter=cond)
+
+    # Promote integer columns to Float64, excluding partition columns.
+    new_fields: list[pa.Field] = []
+    for f in table.schema:
+        if pa.types.is_integer(f.type) and f.name not in {"year", "month"}:
+            new_fields.append(pa.field(f.name, pa.float64()))
+        else:
+            new_fields.append(f)
+    table = table.cast(pa.schema(new_fields))
+
+    return pl.from_arrow(table)
