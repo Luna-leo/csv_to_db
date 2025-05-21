@@ -413,6 +413,20 @@ def write_parquet_file(
 
     tbl = df.to_arrow()
 
+    # 1) 既存メタデータ収集
+    existing_metas: list[pq.FileMetaData] = []
+    meta_file = parquet_path / "_metadata"
+    if meta_file.exists():
+        pf = pq.ParquetFile(meta_file)
+        existing_metas.append(pf.metadata)
+    else:
+        for p in parquet_path.rglob("*.parquet"):
+            try:
+                pf = pq.ParquetFile(p)
+                existing_metas.append(pf.metadata)
+            except Exception:
+                continue
+
     # 1) 書き出しつつ各ファイルのメタデータを収集
     meta_collector: list[pq.FileMetaData] = []
 
@@ -429,21 +443,20 @@ def write_parquet_file(
         file_visitor=_visitor,
     )
 
-    # 2) スキーマを統合
+    # 2) 既存と新規のメタデータからスキーマを統合
+    combined_metas = existing_metas + meta_collector
     unified_schema = pa.unify_schemas(
-
-        [m.schema.to_arrow_schema() for m in meta_collector]
-
+        [m.schema.to_arrow_schema() for m in combined_metas]
     )
 
     # 3) スキーマのみ
     pq.write_metadata(unified_schema, parquet_path / "_common_metadata")
 
-    # 4) スキーマ＋統計入り
+    # 4) スキーマ＋統計入り (全ファイル分)
     pq.write_metadata(
         unified_schema,
         parquet_path / "_metadata",
-        metadata_collector=meta_collector,
+        metadata_collector=combined_metas,
     )
 
     return row_count, column_count
