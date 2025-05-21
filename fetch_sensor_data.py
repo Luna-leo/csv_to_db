@@ -1,77 +1,60 @@
-"""Utility to query sensor data stored as a partitioned Parquet dataset."""
-
-from datetime import datetime
-from pathlib import Path
-
-import pyarrow as pa
-import pyarrow.dataset as ds
 import polars as pl
+from pathlib import Path
+import pyarrow.dataset as ds
+import pyarrow as pa
+from datetime import datetime
 
+def _to_dt(ts):  # str → datetime 変換ユーティリティ
+    return ts if isinstance(ts, datetime) else datetime.fromisoformat(ts)
 
-def _to_datetime(value: str | datetime) -> datetime:
-    """Normalize ``value`` to ``datetime``."""
-    if isinstance(value, str):
-        return datetime.fromisoformat(value)
-    return value
-
-def load_sensor_data(
+def load_dataset(
     root: str | Path,
-    start: str | datetime,
-    end: str | datetime,
-    plant: str | None = None,
-    machine: str | None = None,
+    *,
+    plant_name: str | None = None,
+    machine_no: str | None = None,
+    start: str | datetime | None = None,
+    end:   str | datetime | None = None,
+    selected_columns: list[str] | None = None,
 ) -> pl.DataFrame:
-    """Load records between ``start`` and ``end`` from a partitioned dataset.
 
-    On some datasets integer columns may contain floating point values which
-    causes ``pyarrow`` to raise ``ArrowInvalid`` when materializing the data.
-    To avoid this issue all integer columns (except the partitioning columns)
-    are promoted to ``Float64`` before converting to a :class:`polars.DataFrame`.
-    """
+    part_schema = pa.schema([
+        ("machine_no", pa.string()),
+        ("year",  pa.int16()),
+        ("month", pa.int8()),
+    ])
 
-    # ディレクトリ名から year/month をパースさせる。データセットは Hive 形式
-    # ではなく Directory 形式で保存されているため ``flavor="directory"`` を
-    # 使用する
-    schema = pa.schema(
-        [
-            ("plant_name", pa.string()),
-            ("machine_no", pa.string()),
-            ("year", pa.int16()),
-            ("month", pa.int8()),
-        ]
-    )
-
-    root = Path(root)
+    # 1) Arrow Dataset（Directory 形式）
     dataset = ds.dataset(
-        root,
+        root / plant_name,
         format="parquet",
-        partitioning=ds.partitioning(schema)
+        partitioning=ds.partitioning(part_schema),
     )
 
-    start_dt = _to_datetime(start)
-    end_dt = _to_datetime(end)
+    # 2) Lazy スキャン
+    lf = pl.scan_pyarrow_dataset(dataset)
 
-    # Build pyarrow.dataset filter expression first. Using PyArrow directly
-    # allows us to cast the resulting table before handing it over to Polars
-    # which prevents type mismatches.
-    cond = (
-        (ds.field("Datetime") >= pa.scalar(start_dt))
-        & (ds.field("Datetime") <= pa.scalar(end_dt))
-    )
-    if plant:
-        cond &= ds.field("plant_name") == plant
-    if machine:
-        cond &= ds.field("machine_no") == machine
+    # 3) Polars 式でフィルタを組立（自動 push-down）
+    cond = pl.lit(True)
+    if machine_no:
+        cond &= pl.col("machine_no") == machine_no
+    if start:
+        sdt = _to_dt(start)
+        cond &= (pl.col("year") >  sdt.year - 1) & (
+                 (pl.col("year") >  sdt.year) |
+                 ((pl.col("year") == sdt.year) & (pl.col("month") >= sdt.month))
+        )
+        cond &= pl.col("Datetime") >= sdt          # 秒レベル
+    if end:
+        edt = _to_dt(end)
+        cond &= (pl.col("year") <  edt.year + 1) & (
+                 (pl.col("year") <  edt.year) |
+                 ((pl.col("year") == edt.year) & (pl.col("month") <= edt.month))
+        )
+        cond &= pl.col("Datetime") <= edt
 
-    table = dataset.to_table(filter=cond)
+    lf = lf.filter(cond)
 
-    # Promote integer columns to Float64, excluding partition columns.
-    new_fields: list[pa.Field] = []
-    for f in table.schema:
-        if pa.types.is_integer(f.type) and f.name not in {"year", "month"}:
-            new_fields.append(pa.field(f.name, pa.float64()))
-        else:
-            new_fields.append(f)
-    table = table.cast(pa.schema(new_fields))
+    if selected_columns:
+        lf = lf.select(selected_columns)
 
-    return pl.from_arrow(table)
+    return lf.collect()
