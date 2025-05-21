@@ -4,6 +4,7 @@ from pathlib import Path
 import pyarrow.dataset as ds
 import zipfile
 from datetime import datetime
+from polars import selectors as cs  
 
 from typing import Callable, Dict
 
@@ -391,15 +392,15 @@ def write_parquet_file(
         ]
     )
 
-    # ── 数値列 → Float64（year/month は除外） ───────────────
-    numeric_cols = [
-        c for c, dt in lf.schema.items()
-        if dt in pl.NUMERIC_DTYPES and c not in {"year", "month"}
-    ]
-    if numeric_cols:                       # 空リストでも OK だが念のため
-        lf = lf.with_columns(
-            pl.col(numeric_cols).cast(pl.Float64)
+    lf = (
+        lf
+        # year / month を除く数値列を Float64 に統一
+        .with_columns(
+            cs.numeric()                # ① すべての数値列
+            .exclude(["year", "month"]) # ② 除外したい列
+            .cast(pl.Float64)           # ③ キャスト
         )
+    )
 
 
     df = lf.collect()
