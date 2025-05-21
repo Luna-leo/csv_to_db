@@ -447,6 +447,7 @@ def write_parquet_file(
 
     tbl = _cast_table(tbl, write_schema)
 
+
     # 1) 書き出しつつ各ファイルのメタデータを収集
     meta_collector: list[pq.FileMetaData] = []
 
@@ -457,6 +458,7 @@ def write_parquet_file(
         data=tbl,
         base_dir=parquet_path,
         format="parquet",
+        schema=write_schema,
         partitioning=["plant_name", "machine_no", "year", "month"],
         existing_data_behavior="overwrite_or_ignore",
         create_dir=True,
