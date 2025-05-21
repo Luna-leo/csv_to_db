@@ -436,6 +436,7 @@ def write_parquet_file(
     else:
         write_schema = tbl.schema
 
+
     # 1) 書き出しつつ各ファイルのメタデータを収集
     meta_collector: list[pq.FileMetaData] = []
 
