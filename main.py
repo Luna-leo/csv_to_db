@@ -427,6 +427,16 @@ def write_parquet_file(
             except Exception:
                 continue
 
+    # 1.5) 新規データを既存スキーマへ合わせる
+    if existing_metas:
+        write_schema = pa.unify_schemas(
+            [tbl.schema] + [m.schema.to_arrow_schema() for m in existing_metas]
+        )
+        tbl = tbl.cast(write_schema)
+    else:
+        write_schema = tbl.schema
+
+
     # 1) 書き出しつつ各ファイルのメタデータを収集
     meta_collector: list[pq.FileMetaData] = []
 
@@ -437,6 +447,7 @@ def write_parquet_file(
         data=tbl,
         base_dir=parquet_path,
         format="parquet",
+        schema=write_schema,
         partitioning=["plant_name", "machine_no", "year", "month"],
         existing_data_behavior="overwrite_or_ignore",
         create_dir=True,
