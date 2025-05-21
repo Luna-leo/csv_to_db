@@ -10,7 +10,12 @@ import polars as pl
 
 def _to_expr(value: str | datetime) -> pl.Expr:
     """Convert ``value`` to a Polars expression."""
-    return pl.datetime(value) if isinstance(value, str) else pl.lit(value)
+    if isinstance(value, str):
+        # ``pl.datetime`` requires numeric ``year``/``month``/``day`` arguments.
+        # For convenience accept ISO formatted strings and convert them to
+        # ``datetime`` objects first.
+        value = datetime.fromisoformat(value)
+    return pl.lit(value)
 
 def load_sensor_data(
     root: str | Path,
